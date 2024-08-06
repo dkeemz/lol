@@ -127,4 +127,4 @@ api.add_resource(DeleteUser,'/deleteu/<int:id>')
 api.add_resource(UpdateUser,'/updateu/<int:id>')
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run()
