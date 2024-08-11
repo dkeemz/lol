@@ -1,48 +1,69 @@
-from flask import Flask
-from flask_sqlalchemy import SQLAlchemy
+from flask import Flask, request, jsonify
+from werkzeug.utils import secure_filename
 from flask_restful import Api, Resource, reqparse
+from flask_uploads import UploadSet, configure_uploads, IMAGES
+from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
+import os
+from flask_login import UserMixin, LoginManager
+from dotenv import load_dotenv
 
+# Import the database from extensions
+from extensions import db
+
+# Import your models
+from models import User, Project, Image, Video
+
+load_dotenv()
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///data.db'
-db = SQLAlchemy(app)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
+app.config['UPLOADED_IMAGES_DEST'] = 'uploads/images'
+app.config['UPLOAD_FOLDER'] = os.path.join(os.getcwd(), 'uploads')
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
+app.config['IMAGE_UPLOAD_FOLDER'] = os.path.join(os.getcwd(), 'uploads', 'images')
+app.config['VIDEO_UPLOAD_FOLDER'] = os.path.join(os.getcwd(), 'uploads', 'videos')
+
+db.init_app(app)
 api = Api(app)
 
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
 
+# Create directories if they don't exist
+os.makedirs(app.config['IMAGE_UPLOAD_FOLDER'], exist_ok=True)
+os.makedirs(app.config['VIDEO_UPLOAD_FOLDER'], exist_ok=True)
 
-#  DB MODELS
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    address = db.Column(db.String(100))
-    confirm_password = db.Column(db.String(100))
-    email = db.Column(db.String(100), unique=True)
-    image = db.Column(db.String(100))
-    lga = db.Column(db.String(100))
-    name = db.Column(db.String(100))
-    password = db.Column(db.String(100))
-    role = db.Column(db.String(50))
-    state = db.Column(db.String(50))
+# Configure Flask-Uploads
+images = UploadSet('images', IMAGES)
+configure_uploads(app, images)
 
-class Project(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    category = db.Column(db.String(100))
-    contractor = db.Column(db.String(100))
-    description = db.Column(db.String(200))
-    end_date = db.Column(db.DateTime)
-    start_date = db.Column(db.DateTime)
-    name = db.Column(db.String(100))
-    latLng = db.Column(db.PickleType)
-    images = db.Column(db.PickleType)  # Store list of image paths
-    videos = db.Column(db.PickleType)  # Store list of video paths
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    user = db.relationship('User', backref=db.backref('projects', lazy=True))
+def allowed_file(filename):
+    ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'mp4', 'avi'}
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return 'No file part', 400
+    file = request.files['file']
+    if file.filename == '':
+        return 'No selected file', 400
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        if file.content_type.startswith('image/'):
+            file_path = os.path.join(app.config['IMAGE_UPLOAD_FOLDER'], filename)
+        elif file.content_type.startswith('video/'):
+            file_path = os.path.join(app.config['VIDEO_UPLOAD_FOLDER'], filename)
+        else:
+            return 'Unsupported file type', 400
+        file.save(file_path)
+        return 'File uploaded successfully', 201
+    else:
+        return 'Unsupported file type', 400
 
-
-
-
-# API Resources
 class UserResource(Resource):
     def get(self, user_id=None):
         if user_id:
@@ -72,9 +93,8 @@ class UserResource(Resource):
     def post(self):
         parser = reqparse.RequestParser()
         parser.add_argument('address', required=True)
-        parser.add_argument('confirm_password', required=True)
         parser.add_argument('email', required=True)
-        parser.add_argument('image', required=True)
+        parser.add_argument('image', type=str, location='files', required=True)
         parser.add_argument('lga', required=True)
         parser.add_argument('name', required=True)
         parser.add_argument('password', required=True)
@@ -82,17 +102,19 @@ class UserResource(Resource):
         parser.add_argument('state', required=True)
         args = parser.parse_args()
 
+        image = images.save(request.files['image'])
+        image_path = f'uploads/images/{image}'
+
         user = User(
             address=args['address'],
-            confirm_password=args['confirm_password'],
             email=args['email'],
-            image=args['image'],
+            image=image_path,
             lga=args['lga'],
             name=args['name'],
-            password=args['password'],
             role=args['role'],
             state=args['state']
         )
+        user.set_password(args['password'])
         db.session.add(user)
         db.session.commit()
         return {'message': 'User created successfully'}, 201
@@ -109,8 +131,8 @@ class ProjectResource(Resource):
                 'start_date': project.start_date.isoformat(),
                 'name': project.name,
                 'latLng': project.latLng,
-                'images': project.images,
-                'videos': project.videos,
+                'images': [image.path for image in project.images],
+                'videos': [video.path for video in project.videos],
                 'user_id': project.user_id
             }
         elif user_id:
@@ -124,8 +146,8 @@ class ProjectResource(Resource):
                 'start_date': project.start_date.isoformat(),
                 'name': project.name,
                 'latLng': project.latLng,
-                'images': project.images,
-                'videos': project.videos,
+                'images': [image.path for image in project.images],
+                'videos': [video.path for video in project.videos],
                 'user_id': project.user_id
             } for project in projects]
         else:
@@ -139,8 +161,8 @@ class ProjectResource(Resource):
                 'start_date': project.start_date.isoformat(),
                 'name': project.name,
                 'latLng': project.latLng,
-                'images': project.images,
-                'videos': project.videos,
+                'images': [image.path for image in project.images],
+                'videos': [video.path for video in project.videos],
                 'user_id': project.user_id
             } for project in projects]
 
@@ -153,10 +175,12 @@ class ProjectResource(Resource):
         parser.add_argument('start_date', required=True)
         parser.add_argument('name', required=True)
         parser.add_argument('latLng', required=True, action='append')
-        parser.add_argument('images', required=True, action='append')
+        parser.add_argument('images', type=str, location='files', action='append', required=True)
         parser.add_argument('videos', required=True, action='append')
         parser.add_argument('user_id', required=True, type=int)
         args = parser.parse_args()
+
+        image_paths = [f'uploads/images/{images.save(image)}' for image in request.files.getlist('images')]
 
         try:
             project = Project(
@@ -167,8 +191,8 @@ class ProjectResource(Resource):
                 start_date=datetime.fromisoformat(args['start_date']),
                 name=args['name'],
                 latLng=args['latLng'],
-                images=args['images'],
-                videos=args['videos'],
+                images=[Image(path=path) for path in image_paths],
+                videos=[Video(path=path) for path in args['videos']],
                 user_id=args['user_id']
             )
             db.session.add(project)
@@ -178,20 +202,12 @@ class ProjectResource(Resource):
             db.session.rollback()
             return {'message': str(e)}, 500
 
-
-
-
-
-
+# Register API resources with endpoints
 api.add_resource(UserResource, '/user', '/user/<int:user_id>')
 api.add_resource(ProjectResource, '/project', '/project/<int:project_id>', '/user/<int:user_id>/projects')
 
-
-
-
 if __name__ == '__main__':
     with app.app_context():
+        db.drop_all()
         db.create_all()
     app.run(debug=True)
-
-
