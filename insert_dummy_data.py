@@ -1,62 +1,69 @@
+from datetime import datetime, timedelta
 from app import app, db, User, Project, Image, Video
-from datetime import datetime
+from werkzeug.security import generate_password_hash
 import random
+import string
+import os
 
-with app.app_context():
-    # Drop all tables and recreate them
-    db.drop_all()
-    db.create_all()
+def random_string(length=10):
+    letters = string.ascii_lowercase
+    return ''.join(random.choice(letters) for _ in range(length))
 
-    # Create 30 dummy users
-    users = []
-    for i in range(1, 31):
-        user = User(
-            address=f"{i} Main St",
-            email=f"user{i}@example.com",
-            image=f"uploads/images/user{i}.jpg",
-            lga=f"LGA{i}",
-            name=f"User {i}",
-            role="User" if i % 2 == 0 else "Admin",
-            state=f"State{i}"
-        )
-        user.set_password("password")
-        users.append(user)
+def create_dummy_file(filename, folder):
+    file_path = os.path.join(folder, filename)
+    with open(file_path, 'wb') as f:
+        f.write(os.urandom(1024))  # Create a dummy file with random content
+    return file_path
 
-    # Add users to the session
-    db.session.add_all(users)
-    db.session.commit()
+def insert_dummy_data():
+    with app.app_context():
+        # Drop all tables and recreate them
+        db.drop_all()
+        db.create_all()
 
-    # Create 30 dummy projects
-    projects = []
-    for i in range(1, 31):
-        project = Project(
-            category=f"Category{i}",
-            contractor=f"Contractor{i}",
-            description=f"Description{i}",
-            end_date=datetime(2023 + i % 2, 12, 31),
-            start_date=datetime(2023, 1, 1),
-            name=f"Project {i}",
-            latLng=[(random.uniform(-90, 90), random.uniform(-180, 180))],
-            user_id=users[i % 30].id
-        )
-        projects.append(project)
+        # Create 10 dummy users
+        users = []
+        for i in range(10):
+            image_path = create_dummy_file(f'image{i}.jpg', app.config['IMAGE_UPLOAD_FOLDER'])
+            user = User(
+                address=f'{random.randint(1, 999)} {random_string(10)} St',
+                email=f'user{i}@example.com',
+                image=image_path,
+                lga=f'LGA{i}',
+                name=f'User {i}',
+                role=random.choice(['admin', 'user']),
+                state=f'State{i}'
+            )
+            user.set_password(f'password{i}')
+            users.append(user)
+            db.session.add(user)
+        db.session.commit()
 
-    # Add projects to the session
-    db.session.add_all(projects)
-    db.session.commit()
+        # Create 50 dummy projects
+        for i in range(50):
+            image_paths = [
+                create_dummy_file(f'image{i}_1.jpg', app.config['IMAGE_UPLOAD_FOLDER']),
+                create_dummy_file(f'image{i}_2.jpg', app.config['IMAGE_UPLOAD_FOLDER'])
+            ]
+            video_path = create_dummy_file(f'video{i}.mp4', app.config['VIDEO_UPLOAD_FOLDER'])
 
-    # Create dummy images and videos for projects
-    images = []
-    videos = []
-    for i in range(1, 31):
-        image = Image(path=f"uploads/images/project{i}_img1.jpg", project_id=projects[i % 30].id)
-        video = Video(path=f"uploads/videos/project{i}_vid1.mp4", project_id=projects[i % 30].id)
-        images.append(image)
-        videos.append(video)
+            images = [Image(path=path) for path in image_paths]
+            videos = [Video(path=video_path)]
 
-    # Add images and videos to the session
-    db.session.add_all(images)
-    db.session.add_all(videos)
-    db.session.commit()
+            project = Project(
+                category=f'Category{i}',
+                contractor=f'Contractor{i}',
+                description=f'Description of project {i}',
+                end_date=datetime.now() + timedelta(days=random.randint(1, 365)),
+                start_date=datetime.now() - timedelta(days=random.randint(1, 365)),
+                name=f'Project {i}',
+                latLng=[random.uniform(-90, 90), random.uniform(-180, 180)],
+                images=images,
+                videos=videos,
+                user_id=random.choice(users).id
+            )
+            db.session.add(project)
+        db.session.commit()
 
-    print("30 dummy users and projects inserted successfully!")
+if __name__ == '__main__':
+    insert_dummy_data()

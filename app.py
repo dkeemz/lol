@@ -208,6 +208,6 @@ api.add_resource(ProjectResource, '/project', '/project/<int:project_id>', '/use
 
 if __name__ == '__main__':
     with app.app_context():
-        db.drop_all()
+        # db.drop_all() # only when You want to delete the db
         db.create_all()
     app.run(debug=True)
